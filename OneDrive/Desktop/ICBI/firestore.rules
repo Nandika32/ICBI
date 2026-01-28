@@ -1,0 +1,61 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // --- Helper Functions ---
+    function isSignedIn() {
+      return request.auth != null;
+    }
+    
+    function hasRole(role) {
+      return isSignedIn() && request.auth.token.role == role;
+    }
+    
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    // --- Users Collection ---
+    match /users/{userId} {
+      allow read: if isSignedIn(); // All authenticated users can read basic profiles? Or restrict?
+      allow write: if isOwner(userId); // Users modify own profile
+    }
+
+    // --- Samples Collection ---
+    // Hospitals can write only their own samples
+    // Researchers can only read samples
+    match /samples/{sampleId} {
+      allow read: if isSignedIn() && (hasRole('researcher') || hasRole('hospital') || hasRole('admin'));
+      
+      // Allow create if user is hospital AND the data.hospitalId matches their UID
+      allow create: if hasRole('hospital') && request.resource.data.hospitalId == 'users/' + request.auth.uid;
+      
+      // Allow update if user is hospital AND they own the sample (check resource)
+      allow update: if hasRole('hospital') && resource.data.hospitalId == 'users/' + request.auth.uid;
+      
+      allow delete: if hasRole('hospital') && resource.data.hospitalId == 'users/' + request.auth.uid;
+    }
+
+    // --- Cart Collection ---
+    // Cart belongs only to its owner
+    match /carts/{userId} {
+      allow read, write: if isOwner(userId);
+    }
+
+    // --- Requests Collection ---
+    // Requests visible only to involved parties (researcher or hospital)
+    match /requests/{requestId} {
+      allow read: if isSignedIn() && (
+        resource.data.researcherId == 'users/' + request.auth.uid || 
+        resource.data.hospitalId == 'users/' + request.auth.uid
+      );
+      
+      // Creation usually happens via Backend due to complex transactions, 
+      // but if Client does it, allow if researcher owns the request
+      allow create: if hasRole('researcher') && request.resource.data.researcherId == 'users/' + request.auth.uid;
+      
+      // Updates (status changes) usually by Hospital
+      allow update: if hasRole('hospital') && resource.data.hospitalId == 'users/' + request.auth.uid;
+    }
+  }
+}
